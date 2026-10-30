@@ -117,6 +117,14 @@ Training uses a curriculum of reachable baseline prefixes, annealed to ordinary 
 
 The API comparison endpoint persists every evaluated episode. Use Evaluations → Run local comparison for a 15-episode-per-policy baseline/PPO comparison. Nemotron evaluation requires explicit opt-in and an enabled budget. Its five-decision limit may leave an episode unresolved; such episodes count as failures rather than fabricated completions.
 
+## Live LLM status (verified 2026-10-30)
+
+- **NVIDIA Nemotron 3.5 Lightning via OpenRouter:** integrated and tested live. Real model tool calls were validated and executed through the simulator over multiple decisions. In 4 final-configuration episodes, **none reached a safe completion**: the judge rejected two premature `complete` calls, and two episodes hit the 5-decision limit. OpenRouter, not Nebius, is the inference provider.
+- **Nebius Token Factory / Nebius AI Cloud:** not used. Onboarding required a payment card and no card-free participant access was available.
+- **Mock tool adapter:** offline, not an LLM.
+
+Configuration is now provider-separated: `LLM_PROVIDER=openrouter|nebius`. OpenRouter reads only `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL` (must end in `:free`) and `OPENROUTER_API_KEY`. Nebius reads only `NEBIUS_*`, and an OpenRouter key placed in a Nebius variable is rejected. Run `scripts/probe-llm.py` for one live check. The `LLM_*` variable names described below are superseded by this layout; see `.env.example`.
+
 ## Configure the model provider locally
 
 The backend reads provider-neutral `LLM_*` variables (the older `NEBIUS_*` names still work as fallbacks). The current local setup uses **NVIDIA Nemotron through OpenRouter**:
