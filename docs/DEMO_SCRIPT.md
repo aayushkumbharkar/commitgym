@@ -13,4 +13,4 @@ Do not claim live Nebius inference unless the connectivity probe and a real tool
 | 2:40–2:55 | History, replay verification | Every action, state, invariant and reward is persisted. Replaying the original seed and actions reproduces the recorded outcome. |
 | 2:55–3:00 | Return to Overview | CommitGym: train agents to recover safely, not just execute successfully. |
 
-A local browser recording can demonstrate the working test build. A final hackathon video still needs narration and, to substantiate the mandatory integration, verified live NVIDIA inference footage. Never show API keys, account details or promotional codes during recording.
+A captioned 66-second capture of the real app (`docs/demo/commitgym-local-demo.webm`, regenerated 2026-10-30 with `COMMITGYM_TEST_URL=http://127.0.0.1:8000 node frontend/record-demo.mjs`) demonstrates the working build, including the labelled mock adapter. A final hackathon video still needs narration and, to substantiate the mandatory integration, verified live NVIDIA inference footage. Never show API keys, account details or promotional codes during recording.
