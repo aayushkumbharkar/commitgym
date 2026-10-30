@@ -6,7 +6,9 @@ from app.services.store import Store
 @pytest.fixture
 def client(tmp_path,monkeypatch):
     monkeypatch.setattr(api,'store',Store(str(tmp_path/'test.sqlite3')))
-    for k in ('LLM_API_KEY','NEBIUS_API_KEY','NEBIUS_TOKEN_FACTORY_KEY','LLM_ENABLED','LLM_BASE_URL','LLM_MODEL'): monkeypatch.delenv(k,raising=False)
+    import os
+    for k in list(os.environ):
+        if k.startswith(('LLM_','NEBIUS_','OPENROUTER_')): monkeypatch.delenv(k,raising=False)
     monkeypatch.delenv('COMMITGYM_ACCESS_TOKEN',raising=False)
     monkeypatch.delenv('COMMITGYM_PUBLIC',raising=False)
     return TestClient(api.app)
@@ -29,7 +31,7 @@ def test_validation_and_unavailable(client):
     assert client.post('/api/episodes',json={'scenario':'unknown'}).status_code==422
     assert client.get('/api/episodes/missing').status_code==404
     assert client.post('/api/episodes',json={'policy':'nemotron'}).status_code==503
-    assert not client.get('/api/health').json()['nebius']['configured']
+    assert not client.get('/api/health').json()['nebius']['configured'] and not client.get('/api/health').json()['llm']['configured']
     id=client.post('/api/episodes',json={}).json()['id']
     assert client.post(f'/api/episodes/{id}/step',json={'action':'shell'}).status_code==422
     assert client.post('/api/evaluations',json={'seeds':[2]}).status_code==422
@@ -59,7 +61,7 @@ def test_mock_tool_adapter_episode_is_labelled(client):
     assert 1<=doc['model_calls']<=5 and doc['decisions']
     assert all(d['mock'] and d['tokens']==0 and 'no LLM' in d['provider'] for d in doc['decisions'])
     assert all(e['decision']['mock'] for e in doc['events'])
-    assert client.get('/api/health').json()['nebius']['usage']['requests']==0
+    assert client.get('/api/health').json()['llm']['usage']['requests']==0
     assert response.status_code==200 or 'decision limit' in response.json()['detail']
     assert client.post(f'/api/episodes/{id}/replay').json()['matched']
 
@@ -67,3 +69,25 @@ def test_health_reports_key_conflict_without_values(client,monkeypatch):
     monkeypatch.setenv('NEBIUS_API_KEY','one-secret'); monkeypatch.setenv('NEBIUS_TOKEN_FACTORY_KEY','two-secret')
     body=client.get('/api/health').text
     assert 'different values' in body and 'one-secret' not in body and 'two-secret' not in body
+
+def test_health_separates_openrouter_and_nebius(client,monkeypatch):
+    monkeypatch.setenv('LLM_PROVIDER','openrouter'); monkeypatch.setenv('OPENROUTER_API_KEY','sk-or-health-test')
+    health=client.get('/api/health')
+    data=health.json()
+    assert data['llm']['label']=='OpenRouter' and data['llm']['configured'] and data['llm']['model'].endswith(':free')
+    assert data['nebius']=={'configured':False,'enabled':False,'active':False,'config_error':'NEBIUS_API_KEY is not configured on the backend'}
+    assert 'sk-or-health-test' not in health.text
+
+def test_live_failure_is_recorded_without_mock_fallback(client,monkeypatch):
+    import app.agents.nemotron as nemotron
+    monkeypatch.setenv('LLM_PROVIDER','openrouter'); monkeypatch.setenv('OPENROUTER_API_KEY','sk-or-test')
+    def failing(self, env, prior):
+        self.last_request={'provider':'OpenRouter','model':self.model,'status':'rate_limited','error':'rate limited (HTTP 429)','latency_seconds':0.1}
+        raise nemotron.AgentUnavailable('OpenRouter request failed: rate limited (HTTP 429); no automatic retry')
+    monkeypatch.setattr(nemotron.Nemotron,'decide',failing)
+    id=client.post('/api/episodes',json={'policy':'nemotron'}).json()['id']
+    response=client.post(f'/api/episodes/{id}/run')
+    assert response.status_code==503 and 'rate limited' in response.json()['detail']
+    doc=client.get(f'/api/episodes/{id}').json()
+    assert doc['model_requests'][0]['status']=='rate_limited' and doc['events']==[] and not doc['decisions']
+    assert 'rate limited' in doc['blocked_reason']

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from app.environment.env import ACTIONS, SCENARIOS, CommitGymEnv
 from app.agents.policies import Baseline, PPOPolicy
-from app.agents.nemotron import Nemotron, OfflineToolAdapter, AgentUnavailable, ActionName, resolve_api_key, model_name, enabled, provider_name, free_model
+from app.agents.nemotron import Nemotron, OfflineToolAdapter, AgentUnavailable, ActionName, provider_config, provider_status
 from app.evaluation.evaluate import episode_metrics, aggregate
 from app.services.store import Store
 
@@ -59,7 +59,7 @@ def get_ppo():
 
 def require_policy(name):
     if name=='ppo' and not Path('models/ppo_commitgym.zip').exists(): raise HTTPException(409,'Train a PPO checkpoint first')
-    if name=='nemotron' and not resolve_api_key(): raise AgentUnavailable('LLM_API_KEY is not configured on the backend')
+    if name=='nemotron': provider_config().check()
 
 
 def reconstruct(doc):
@@ -93,7 +93,12 @@ def advance(doc,env,action=None,policy=None):
         if prior >= agent.max_decisions: raise AgentUnavailable('Episode decision limit reached')
         doc['model_calls']=prior+1
         persist(doc,env)
-        actions,decision=agent.decide(env,prior)
+        try: actions,decision=agent.decide(env,prior)
+        except AgentUnavailable:
+            # Failed, rejected and rate-limited requests stay visible on the episode; there is no silent mock fallback.
+            if agent.last_request: doc.setdefault('model_requests',[]).append(agent.last_request); persist(doc,env)
+            raise
+        if agent.last_request: doc.setdefault('model_requests',[]).append(agent.last_request)
         doc.setdefault('decisions',[]).append(decision)
         for selected in actions:
             env.step(ACTIONS.index(selected)); env.events[-1]['decision']=decision
@@ -106,18 +111,20 @@ def advance(doc,env,action=None,policy=None):
 
 @app.get('/api/health')
 def health():
-    connection=store.get('nebius_connection','connection')
-    model=model_name()
-    try: configured,config_error=resolve_api_key() is not None,None
-    except AgentUnavailable as e: configured,config_error=False,str(e)
-    return {'status':'ok','environment_version':'1.0.0','nebius':{'configured':configured,'config_error':config_error,
-            'enabled':enabled(),'model':model,'provider':provider_name(),'free_model':free_model(model),
-            'connection':connection if configured and connection and connection['model']==model else None,'usage':store.budget()},
+    llm=provider_status()
+    connection=store.get(f"{llm['id']}_connection",'connection')
+    llm['connection']=connection if llm['configured'] and connection and connection['model']==llm['model'] else None
+    llm['usage']=store.budget()
+    nebius=provider_status('nebius')
+    return {'status':'ok','environment_version':'1.0.0','llm':llm,
+            'nebius':{'configured':nebius['configured'],'enabled':nebius['enabled'],'active':llm['id']=='nebius','config_error':nebius['config_error']},
             'ppo_available':Path('models/ppo_commitgym.zip').exists()}
 @app.get('/api/scenarios')
 def scenarios(): return [{'id':k,'description':v} for k,v in SCENARIOS.items()]
-@app.post('/api/nebius/probe')
-def probe(): return {'model':Nemotron(store).verify_model(),'catalog_verified':True,'inference_verified':False}
+@app.post('/api/llm/probe')
+def probe():
+    agent=Nemotron(store)
+    return {'provider':agent.provider,'model':agent.verify_model(),'catalog_verified':True,'inference_verified':False}
 @app.post('/api/episodes',status_code=201)
 def create(body:NewEpisode):
     require_policy(body.policy)
