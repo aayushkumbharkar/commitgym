@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test'
+export default defineConfig({testDir:'./tests',timeout:60000,expect:{timeout:15000},fullyParallel:false,workers:1,reporter:[['list'],['json',{outputFile:'test-results/results.json'}]],use:{baseURL:process.env.COMMITGYM_TEST_URL||'http://127.0.0.1:5173',channel:'chrome',headless:true,trace:'retain-on-failure',video:'retain-on-failure'},outputDir:'test-results/artifacts'})

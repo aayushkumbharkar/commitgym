@@ -10,6 +10,7 @@ def episode_metrics(env):
     unsafe = any(not c['passed'] for c in env.info()['invariants'] if c['critical'])
     return {'success': success, 'deployment_completed': success and env.s.active_release == 2, 'rollback_completed': success and env.s.recovered, 'critical_violations': env.violations, 'unsafe_terminal': unsafe,
             'reward': env.total_reward, 'actions': env.s.step, 'retries': env.retries, 'rollbacks': env.rollbacks,
+            'unresolved': not success and not unsafe,
             'incident': env.s.incident, 'recovery_success': success and env.s.incident, 'failure': not success,
             'simulation_steps': env.s.step}
 
@@ -21,6 +22,7 @@ def aggregate(rows):
             'rollback_completion_rate':sum(r['rollback_completed'] for r in rows)/n,
             'critical_invariant_violations':sum(r['critical_violations'] for r in rows),
             'unsafe_terminal_states':sum(r['unsafe_terminal'] for r in rows),
+            'unresolved_episodes':sum(r.get('unresolved',False) for r in rows),
             'average_reward':sum(r['reward'] for r in rows)/n, 'actions_per_episode':sum(r['actions'] for r in rows)/n,
             'retry_count':sum(r['retries'] for r in rows), 'rollback_count':sum(r['rollbacks'] for r in rows),
             'recovery_sample_count':incident_count,

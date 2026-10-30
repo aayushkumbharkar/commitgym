@@ -26,6 +26,57 @@ Choose at most 3 sequential operations per call. Do not output private reasoning
 
 class AgentUnavailable(Exception): pass
 
+KEY_VARS=('NEBIUS_API_KEY','NEBIUS_TOKEN_FACTORY_KEY')
+def resolve_api_key():
+    """NEBIUS_API_KEY is primary; NEBIUS_TOKEN_FACTORY_KEY is a compatibility fallback. Values are never echoed."""
+    values={k:os.getenv(k,'').strip() for k in KEY_VARS}
+    primary,fallback=values['NEBIUS_API_KEY'],values['NEBIUS_TOKEN_FACTORY_KEY']
+    if primary and fallback and primary != fallback:
+        raise AgentUnavailable('Configuration error: NEBIUS_API_KEY and NEBIUS_TOKEN_FACTORY_KEY are both set with different values; keep only one')
+    return primary or fallback or None
+def key_configured():
+    try: return resolve_api_key() is not None
+    except AgentUnavailable: return False
+
+def build_messages(env):
+    context={'objective':'Verified safe deployment or incident recovery', 'state':env.s.public(),
+             'vector_observation':env.observation().tolist(), 'available_actions':env.available(),
+             'invariants':env.info()['invariants'], 'previous_tool_results':env.events[-3:]}
+    return [{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(context)}]
+
+def parse_tool_call(response):
+    """The single validation boundary for model output: one allowlisted call with strict arguments."""
+    calls=response.choices[0].message.tool_calls
+    if not calls or len(calls)!=1 or calls[0].function.name != 'operate_simulator':
+        raise AgentUnavailable('Model response rejected: exactly one allowlisted tool call required')
+    try: return Operations.model_validate_json(calls[0].function.arguments)
+    except ValidationError: raise AgentUnavailable('Model response rejected: invalid operation arguments') from None
+
+class OfflineToolAdapter:
+    """Deterministic stand-in for the model, for demos and tests without Nebius access.
+    It is NOT an LLM: a local planner (the baseline, batched) emits an OpenAI-format tool call that passes
+    through the same schema validation and batch execution as live Nemotron. No network, no tokens."""
+    provider='Offline mock adapter (no LLM)'
+    def __init__(self):
+        self.max_decisions=min(5,max(1,int(os.getenv('NEBIUS_MAX_DECISIONS','5'))))
+    def plan(self, env):
+        import copy
+        from app.agents.policies import Baseline
+        sim=copy.deepcopy(env); actions=[]
+        while len(actions)<3 and not sim.done:
+            action=ACTIONS[Baseline().choose(sim)]; actions.append(action); sim.step(ACTIONS.index(action))
+            if sim.events[-1]['outcome']['status']!='ok': break
+        return actions
+    def decide(self, env, prior_calls):
+        if prior_calls >= self.max_decisions: raise AgentUnavailable('Episode decision limit reached; episode remains unresolved')
+        build_messages(env)  # same context a live request would carry; nothing is sent anywhere
+        arguments=json.dumps({'actions':self.plan(env)})
+        from types import SimpleNamespace as NS
+        response=NS(choices=[NS(message=NS(tool_calls=[NS(function=NS(name='operate_simulator',arguments=arguments))]))])
+        operations=parse_tool_call(response)
+        return operations.actions, {'provider':self.provider,'model':None,'mock':True,'tokens':0,'estimated_cost_usd':0,
+            'latency_seconds':0,'summary':'Mock tool call (no LLM): '+', '.join(operations.actions),'arguments':operations.model_dump()}
+
 class Nemotron:
     def __init__(self, store, client=None):
         self.store=store
@@ -40,13 +91,14 @@ class Nemotron:
         self.max_requests=min(100,int(os.getenv('NEBIUS_MAX_REQUESTS','20')))
     def get_client(self):
         if self.client is not None: return self.client
-        if not os.getenv('NEBIUS_API_KEY'): raise AgentUnavailable('NEBIUS_API_KEY is not configured on the backend')
+        key=resolve_api_key()
+        if not key: raise AgentUnavailable('NEBIUS_API_KEY is not configured on the backend')
         from urllib.parse import urlparse
         url=urlparse(self.base)
         if url.scheme != 'https' or not (url.hostname or '').endswith('.nebius.com'):
             raise AgentUnavailable('Use an official HTTPS Nebius API endpoint')
         from openai import OpenAI
-        self.client=OpenAI(api_key=os.environ['NEBIUS_API_KEY'],base_url=self.base,
+        self.client=OpenAI(api_key=key,base_url=self.base,
                            timeout=min(60,float(os.getenv('NEBIUS_TIMEOUT_SECONDS','25'))),max_retries=0)
         return self.client
     def verify_model(self):
@@ -67,10 +119,7 @@ class Nemotron:
         connection=self.store.get('nebius_connection','connection')
         if not connection or connection['model'] != self.model or time.time()-connection['checked_at'] > 3600:
             self.verify_model()
-        context={'objective':'Verified safe deployment or incident recovery', 'state':env.s.public(),
-                 'vector_observation':env.observation().tolist(), 'available_actions':env.available(),
-                 'invariants':env.info()['invariants'], 'previous_tool_results':env.events[-3:]}
-        messages=[{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(context)}]
+        messages=build_messages(env)
         # UTF-8 bytes conservatively upper-bound token counts; unknown outcomes retain reservation.
         input_bound=len(json.dumps({'messages':messages,'tools':[TOOL]}).encode())+512
         if input_bound > 24000: raise AgentUnavailable('Input context exceeds configured request guard')
@@ -89,11 +138,7 @@ class Nemotron:
         actual=(usage.prompt_tokens*self.input_rate+usage.completion_tokens*self.output_rate)/1_000_000 if usage else None
         self.store.settle(reservation,actual,tokens,'received')
         self.store.save('connection',{'model':self.model,'catalog_verified':True,'inference_verified':True,'checked_at':time.time()},'nebius_connection')
-        calls=response.choices[0].message.tool_calls
-        if not calls or len(calls)!=1 or calls[0].function.name != 'operate_simulator':
-            raise AgentUnavailable('Model response rejected: exactly one allowlisted tool call required')
-        try: operations=Operations.model_validate_json(calls[0].function.arguments)
-        except ValidationError: raise AgentUnavailable('Model response rejected: invalid operation arguments') from None
+        operations=parse_tool_call(response)
         return operations.actions, {'provider':'Nebius Token Factory','model':self.model,'tokens':tokens,
             'estimated_cost_usd':actual,'latency_seconds':time.perf_counter()-start,
             'summary':'Selected operations: '+', '.join(operations.actions),'arguments':operations.model_dump()}

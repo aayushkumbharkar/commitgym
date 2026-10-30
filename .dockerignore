@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.env.*
+.cache
+.playwright-mcp
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+data
+docs/screenshots
+**/__pycache__
+.pytest_cache
+
+docs/demo

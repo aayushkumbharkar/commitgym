@@ -2,6 +2,7 @@ import json
 import os
 import secrets
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from app.environment.env import ACTIONS, SCENARIOS, CommitGymEnv
 from app.agents.policies import Baseline, PPOPolicy
-from app.agents.nemotron import Nemotron, AgentUnavailable, ActionName
+from app.agents.nemotron import Nemotron, OfflineToolAdapter, AgentUnavailable, ActionName, resolve_api_key
 from app.evaluation.evaluate import episode_metrics, aggregate
 from app.services.store import Store
 
@@ -25,7 +26,9 @@ store=Store()
 async def access_guard(request:Request,call_next):
     token=os.getenv('COMMITGYM_ACCESS_TOKEN','')
     public=os.getenv('COMMITGYM_PUBLIC','false').lower()=='true'
-    if request.method!='OPTIONS' and request.url.path != '/api/health' and (token or public):
+    # Only API routes are protected; the SPA shell must load so a viewer can enter the workspace token.
+    path=request.url.path
+    if request.method!='OPTIONS' and path.startswith('/api/') and path != '/api/health' and (token or public):
         supplied=request.headers.get('authorization','').removeprefix('Bearer ')
         if not token or not secrets.compare_digest(supplied,token): return JSONResponse({'detail':'Workspace access token required'},status_code=401)
     return await call_next(request)
@@ -37,7 +40,7 @@ class NewEpisode(BaseModel):
     model_config=ConfigDict(extra='forbid')
     scenario: Literal['partial_success','stale_health','dependency']='partial_success'
     seed:int=Field(default=42,ge=0,le=2147483647)
-    policy:Literal['baseline','ppo','nemotron']='baseline'
+    policy:Literal['baseline','ppo','nemotron','mock_tools']='baseline'
 class StepBody(BaseModel):
     model_config=ConfigDict(extra='forbid')
     action:ActionName | None=None
@@ -47,9 +50,16 @@ class EvalBody(BaseModel):
     seeds:list[int]=Field(default=[1000000,1000001,1000002],min_length=1,max_length=30)
 
 
+@lru_cache(maxsize=2)
+def cached_ppo(modified):
+    return PPOPolicy()
+
+def get_ppo():
+    return cached_ppo(Path('models/ppo_commitgym.zip').stat().st_mtime_ns)
+
 def require_policy(name):
     if name=='ppo' and not Path('models/ppo_commitgym.zip').exists(): raise HTTPException(409,'Train a PPO checkpoint first')
-    if name=='nemotron' and not os.getenv('NEBIUS_API_KEY'): raise AgentUnavailable('NEBIUS_API_KEY is not configured on the backend')
+    if name=='nemotron' and not resolve_api_key(): raise AgentUnavailable('NEBIUS_API_KEY is not configured on the backend')
 
 
 def reconstruct(doc):
@@ -76,19 +86,20 @@ def advance(doc,env,action=None,policy=None):
     if action is not None:
         env.step(ACTIONS.index(action))
         env.events[-1]['decision']={'provider':'Manual','summary':'User selected '+action,'arguments':{}}
-    elif doc['policy']=='nemotron':
+    elif doc['policy'] in ('nemotron','mock_tools'):
         # Persist the attempt before a network call, including failed calls, so reloads cannot bypass limits.
+        agent=Nemotron(store) if doc['policy']=='nemotron' else OfflineToolAdapter()
         prior=doc.get('model_calls',0)
-        if prior >= Nemotron(store).max_decisions: raise AgentUnavailable('Episode decision limit reached')
+        if prior >= agent.max_decisions: raise AgentUnavailable('Episode decision limit reached')
         doc['model_calls']=prior+1
         persist(doc,env)
-        actions,decision=Nemotron(store).decide(env,prior)
+        actions,decision=agent.decide(env,prior)
         doc.setdefault('decisions',[]).append(decision)
         for selected in actions:
             env.step(ACTIONS.index(selected)); env.events[-1]['decision']=decision
             if env.done or env.events[-1]['outcome']['status']!='ok': break
     else:
-        selected=(policy or (Baseline() if doc['policy']=='baseline' else PPOPolicy())).choose(env)
+        selected=(policy or (Baseline() if doc['policy']=='baseline' else get_ppo())).choose(env)
         env.step(selected)
         env.events[-1]['decision']={'provider':doc['policy'],'summary':'Selected '+ACTIONS[selected], 'arguments':{}}
     return persist(doc,env)
@@ -97,9 +108,11 @@ def advance(doc,env,action=None,policy=None):
 def health():
     connection=store.get('nebius_connection','connection')
     model=os.getenv('NEBIUS_MODEL','nvidia/Nemotron-3_5-Lightning')
-    return {'status':'ok','environment_version':'1.0.0','nebius':{'configured':bool(os.getenv('NEBIUS_API_KEY')),
+    try: configured,config_error=resolve_api_key() is not None,None
+    except AgentUnavailable as e: configured,config_error=False,str(e)
+    return {'status':'ok','environment_version':'1.0.0','nebius':{'configured':configured,'config_error':config_error,
             'enabled':os.getenv('NEBIUS_ENABLED','false')=='true','model':model,
-            'connection':connection if connection and connection['model']==model else None,'usage':store.budget()},
+            'connection':connection if configured and connection and connection['model']==model else None,'usage':store.budget()},
             'ppo_available':Path('models/ppo_commitgym.zip').exists()}
 @app.get('/api/scenarios')
 def scenarios(): return [{'id':k,'description':v} for k,v in SCENARIOS.items()]
@@ -130,7 +143,7 @@ def run(id:str):
     with lock:
         doc=get_doc(id); env=reconstruct(doc); env.events=doc['events'].copy()
         if env.done: raise HTTPException(409,'Episode already finished')
-        policy=PPOPolicy() if doc['policy']=='ppo' else Baseline() if doc['policy']=='baseline' else None
+        policy=get_ppo() if doc['policy']=='ppo' else Baseline() if doc['policy']=='baseline' else None
         while not env.done:
             try: doc=advance(doc,env,policy=policy)
             except AgentUnavailable as e:
@@ -174,3 +187,8 @@ def training():
     eval_path=Path('models/evaluation.json')
     data['evaluation']=json.loads(eval_path.read_text())['policies'] if eval_path.exists() else None
     return data
+
+# Docker serves the built SPA from the same origin; Vite handles development.
+if Path('frontend/dist').is_dir():
+    from fastapi.staticfiles import StaticFiles
+    app.mount('/', StaticFiles(directory='frontend/dist', html=True), name='frontend')

@@ -48,3 +48,22 @@ def test_public_access_guard(client,monkeypatch):
     assert client.post('/api/episodes',json={}).status_code==401
     monkeypatch.setenv('COMMITGYM_ACCESS_TOKEN','test-workspace-token')
     assert client.post('/api/episodes',json={},headers={'Authorization':'Bearer test-workspace-token'}).status_code==201
+    assert client.get('/api/episodes').status_code==401 and client.get('/api/health').status_code==200
+    # Non-API paths (the SPA shell) are not blocked by the guard; 404 here only because tests may lack frontend/dist.
+    assert client.get('/index.html').status_code!=401
+
+def test_mock_tool_adapter_episode_is_labelled(client):
+    id=client.post('/api/episodes',json={'scenario':'stale_health','seed':7,'policy':'mock_tools'}).json()['id']
+    response=client.post(f'/api/episodes/{id}/run')
+    doc=client.get(f'/api/episodes/{id}').json()
+    assert 1<=doc['model_calls']<=5 and doc['decisions']
+    assert all(d['mock'] and d['tokens']==0 and 'no LLM' in d['provider'] for d in doc['decisions'])
+    assert all(e['decision']['mock'] for e in doc['events'])
+    assert client.get('/api/health').json()['nebius']['usage']['requests']==0
+    assert response.status_code==200 or 'decision limit' in response.json()['detail']
+    assert client.post(f'/api/episodes/{id}/replay').json()['matched']
+
+def test_health_reports_key_conflict_without_values(client,monkeypatch):
+    monkeypatch.setenv('NEBIUS_API_KEY','one-secret'); monkeypatch.setenv('NEBIUS_TOKEN_FACTORY_KEY','two-secret')
+    body=client.get('/api/health').text
+    assert 'different values' in body and 'one-secret' not in body and 'two-secret' not in body

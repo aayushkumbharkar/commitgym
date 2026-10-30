@@ -61,3 +61,23 @@ def test_zero_budget_disables_inference(agent):
     agent.cap=0
     with pytest.raises(AgentUnavailable,match='positive spending cap'): agent.decide(env(),0)
     assert agent.store.budget()['requests']==0
+
+def test_key_fallback_and_conflict(monkeypatch):
+    from app.agents.nemotron import resolve_api_key
+    monkeypatch.delenv('NEBIUS_API_KEY',raising=False); monkeypatch.delenv('NEBIUS_TOKEN_FACTORY_KEY',raising=False)
+    assert resolve_api_key() is None
+    monkeypatch.setenv('NEBIUS_TOKEN_FACTORY_KEY','fallback-value')
+    assert resolve_api_key()=='fallback-value'
+    monkeypatch.setenv('NEBIUS_API_KEY','fallback-value')
+    assert resolve_api_key()=='fallback-value'
+    monkeypatch.setenv('NEBIUS_API_KEY','primary-value')
+    with pytest.raises(AgentUnavailable,match='different values') as error: resolve_api_key()
+    assert 'primary-value' not in str(error.value) and 'fallback-value' not in str(error.value)
+
+def test_offline_adapter_uses_validated_tool_batches():
+    from app.agents.nemotron import OfflineToolAdapter
+    e=env(); adapter=OfflineToolAdapter()
+    actions,decision=adapter.decide(e,0)
+    assert 1<=len(actions)<=3 and decision['mock'] and decision['tokens']==0 and decision['model'] is None
+    assert e.s.step==0  # planning never mutates the real episode
+    with pytest.raises(AgentUnavailable,match='decision limit'): adapter.decide(e,adapter.max_decisions)

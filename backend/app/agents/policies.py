@@ -20,6 +20,8 @@ class Baseline:
 class PPOPolicy:
     name = 'ppo'
     def __init__(self, path='models/ppo_commitgym.zip'):
+        import torch
+        torch.set_num_threads(1)
         from stable_baselines3 import PPO
         self.model = PPO.load(path, device='cpu')
     def choose(self, env):

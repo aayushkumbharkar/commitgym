@@ -18,3 +18,9 @@ models/*.json
 !models/.gitkeep
 
 .cache/
+
+*.tsbuildinfo
+
+!models/ppo_commitgym.zip
+!models/training.json
+!models/evaluation.json
