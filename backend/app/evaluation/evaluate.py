@@ -8,7 +8,7 @@ from app.agents.policies import Baseline, PPOPolicy
 def episode_metrics(env):
     success = env.s.transaction == 'completed'
     unsafe = any(not c['passed'] for c in env.info()['invariants'] if c['critical'])
-    return {'success': success, 'critical_violations': env.violations, 'unsafe_terminal': unsafe,
+    return {'success': success, 'deployment_completed': success and env.s.active_release == 2, 'rollback_completed': success and env.s.recovered, 'critical_violations': env.violations, 'unsafe_terminal': unsafe,
             'reward': env.total_reward, 'actions': env.s.step, 'retries': env.retries, 'rollbacks': env.rollbacks,
             'incident': env.s.incident, 'recovery_success': success and env.s.incident, 'failure': not success,
             'simulation_steps': env.s.step}
@@ -17,6 +17,8 @@ def aggregate(rows):
     n=len(rows)
     incident_count=sum(r['incident'] for r in rows)
     return {'sample_count':n, 'safe_completion_rate':sum(r['success'] for r in rows)/n,
+            'deployment_completion_rate':sum(r['deployment_completed'] for r in rows)/n,
+            'rollback_completion_rate':sum(r['rollback_completed'] for r in rows)/n,
             'critical_invariant_violations':sum(r['critical_violations'] for r in rows),
             'unsafe_terminal_states':sum(r['unsafe_terminal'] for r in rows),
             'average_reward':sum(r['reward'] for r in rows)/n, 'actions_per_episode':sum(r['actions'] for r in rows)/n,
@@ -42,7 +44,7 @@ def evaluate(policies=('baseline','ppo'), seeds=None, checkpoint='models/ppo_com
     return result
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(); p.add_argument('--samples',type=int,default=20); a=p.parse_args()
-    result=evaluate(seeds=list(range(1000000,1000000+a.samples)))
+    p=argparse.ArgumentParser(); p.add_argument('--samples',type=int,default=20); p.add_argument('--seed-start',type=int,default=2000000); a=p.parse_args()
+    result=evaluate(seeds=list(range(a.seed_start,a.seed_start+a.samples)))
     Path('models/evaluation.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result['policies'],indent=2))
