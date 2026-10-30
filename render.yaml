@@ -12,16 +12,18 @@ services:
       - key: COMMITGYM_DB
         value: /app/data/commitgym.sqlite3
       # Public mode protects /api/* (except health) with a bearer token; viewers enter it in Settings.
-      # Set COMMITGYM_PUBLIC=false and remove the token only for an open demo with NEBIUS_ENABLED=false.
+      # Set COMMITGYM_PUBLIC=false and remove the token only for an open demo with LLM_ENABLED=false.
       - key: COMMITGYM_PUBLIC
         value: "true"
       - key: COMMITGYM_ACCESS_TOKEN
         generateValue: true
-      - key: NEBIUS_ENABLED
-        value: "false"
-      - key: NEBIUS_BASE_URL
-        value: https://api.tokenfactory.nebius.com/v1
-      - key: NEBIUS_MODEL
-        value: nvidia/Nemotron-3_5-Lightning
-      - key: NEBIUS_API_KEY
+      - key: LLM_ENABLED
+        value: "true"
+      - key: LLM_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: LLM_MODEL
+        value: nvidia/nemotron-3.5-lightning:free
+      - key: LLM_MAX_REQUESTS
+        value: "20"
+      - key: LLM_API_KEY
         sync: false

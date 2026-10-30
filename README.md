@@ -117,7 +117,22 @@ Training uses a curriculum of reachable baseline prefixes, annealed to ordinary 
 
 The API comparison endpoint persists every evaluated episode. Use Evaluations → Run local comparison for a 15-episode-per-policy baseline/PPO comparison. Nemotron evaluation requires explicit opt-in and an enabled budget. Its five-decision limit may leave an episode unresolved; such episodes count as failures rather than fabricated completions.
 
-## Configure Nebius locally
+## Configure the model provider locally
+
+The backend reads provider-neutral `LLM_*` variables (the older `NEBIUS_*` names still work as fallbacks). The current local setup uses **NVIDIA Nemotron through OpenRouter**:
+
+```env
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=nvidia/nemotron-3.5-lightning:free
+LLM_API_KEY=<your key, in the ignored .env only>
+LLM_ENABLED=true
+```
+
+OpenRouter's public catalog lists this model with tool calling and forced `tool_choice` support at $0 (checked 2026-10-30). For `:free` models, prices and a budget are not required, but the request cap (`LLM_MAX_REQUESTS`, default 20), the five-decision limit, the output-token limit and the timeout all still apply. Paid models still require both prices and a positive `LLM_BUDGET_USD`. Only `https://openrouter.ai` and `https://*.nebius.com` endpoints are accepted.
+
+Note: the hackathon is a Nebius × NVIDIA event. Inference through OpenRouter uses an NVIDIA model but not Nebius Token Factory. Switch `LLM_BASE_URL`/`LLM_MODEL` to the Nebius values below if Token Factory usage is required.
+
+### Nebius Token Factory alternative
 
 1. Authenticate yourself at https://tokenfactory.nebius.com. The official quickstart directs you to **Get API key** / **API keys**. Create or copy the project key yourself; do not share it in chat.
 2. Copy `.env.example` to `.env` and edit it locally. This file is ignored by Git and Docker build context.

@@ -15,7 +15,7 @@ This file records what was verified in the Claude Code takeover sprint, what cha
 | Frontend production build | Passes |
 | Docker image | Builds. Verified end-to-end in a Render-like configuration |
 | Demo recording | Re-recorded from the real app: `docs/demo/commitgym-local-demo.webm`, 66 s, captioned, no narration |
-| Live Nemotron / Nebius | **Not verified.** The owner paused it. No key is configured |
+| Live Nemotron | **Not verified yet.** Configured for OpenRouter (`nvidia/nemotron-3.5-lightning:free`) in the local `.env`. `LLM_API_KEY` is still empty, so no request has been made |
 | Promo-code redemption | **Not done.** Needs owner login. The codes are not stored anywhere in the repo |
 | Public deployment (Render) | **Prepared, not deployed.** Needs a GitHub repo and a Render login |
 | Git push | **Not done.** No remote is configured, and the `gh` CLI is signed in as `aayush835`, not `aayushkumbharkar` |
@@ -54,6 +54,12 @@ PPO rolls back every time. Its higher reward does not mean it deploys better: it
 - Reproduction: `evaluate(seeds=range(2000000,2000040))` gave identical aggregate metrics and per-episode rows.
 - Docker: `docker compose build` succeeded. The container ran with `PORT=10000 COMMITGYM_PUBLIC=true` and a token. Results: index 200, health 200, `/api/episodes` without the token 401. Baseline (deployed v2, reward 99, 11 steps), PPO (rollback, reward 103, 7 steps) and the mock adapter (deployed v2, 11 steps) all completed, and all replays matched. The Docker health check reported `healthy`. 3 episodes persisted across `docker restart`. The logs had no errors.
 - Secret scan of the committed files found no promo codes, key patterns or private keys. `.env` and the SQLite databases are ignored.
+
+## OpenRouter configuration (added later on 2026-10-30)
+
+The owner chose OpenRouter for Nemotron. The backend now reads `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` and `LLM_ENABLED`, with the `NEBIUS_*` names kept as fallbacks. `openrouter.ai` was added to the endpoint allowlist. `:free` models skip the price/budget requirement but keep the request cap. The decision provider label comes from the endpoint. The local `.env` was created; it is git-ignored and its key is empty. Verification: 45 backend tests passed, and 10 browser tests passed against a cold-started backend. The PPO browser assertion now allows 45 s for the first torch/checkpoint load.
+
+Caveat: OpenRouter is not Nebius Token Factory. If the event requires Token Factory usage, switch the two URL/model lines in `.env`.
 
 ## Owner actions still required
 

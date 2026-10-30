@@ -6,7 +6,7 @@ from app.services.store import Store
 @pytest.fixture
 def client(tmp_path,monkeypatch):
     monkeypatch.setattr(api,'store',Store(str(tmp_path/'test.sqlite3')))
-    monkeypatch.delenv('NEBIUS_API_KEY',raising=False)
+    for k in ('LLM_API_KEY','NEBIUS_API_KEY','NEBIUS_TOKEN_FACTORY_KEY','LLM_ENABLED','LLM_BASE_URL','LLM_MODEL'): monkeypatch.delenv(k,raising=False)
     monkeypatch.delenv('COMMITGYM_ACCESS_TOKEN',raising=False)
     monkeypatch.delenv('COMMITGYM_PUBLIC',raising=False)
     return TestClient(api.app)

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from app.environment.env import ACTIONS, SCENARIOS, CommitGymEnv
 from app.agents.policies import Baseline, PPOPolicy
-from app.agents.nemotron import Nemotron, OfflineToolAdapter, AgentUnavailable, ActionName, resolve_api_key
+from app.agents.nemotron import Nemotron, OfflineToolAdapter, AgentUnavailable, ActionName, resolve_api_key, model_name, enabled, provider_name, free_model
 from app.evaluation.evaluate import episode_metrics, aggregate
 from app.services.store import Store
 
@@ -59,7 +59,7 @@ def get_ppo():
 
 def require_policy(name):
     if name=='ppo' and not Path('models/ppo_commitgym.zip').exists(): raise HTTPException(409,'Train a PPO checkpoint first')
-    if name=='nemotron' and not resolve_api_key(): raise AgentUnavailable('NEBIUS_API_KEY is not configured on the backend')
+    if name=='nemotron' and not resolve_api_key(): raise AgentUnavailable('LLM_API_KEY is not configured on the backend')
 
 
 def reconstruct(doc):
@@ -107,11 +107,11 @@ def advance(doc,env,action=None,policy=None):
 @app.get('/api/health')
 def health():
     connection=store.get('nebius_connection','connection')
-    model=os.getenv('NEBIUS_MODEL','nvidia/Nemotron-3_5-Lightning')
+    model=model_name()
     try: configured,config_error=resolve_api_key() is not None,None
     except AgentUnavailable as e: configured,config_error=False,str(e)
     return {'status':'ok','environment_version':'1.0.0','nebius':{'configured':configured,'config_error':config_error,
-            'enabled':os.getenv('NEBIUS_ENABLED','false')=='true','model':model,
+            'enabled':enabled(),'model':model,'provider':provider_name(),'free_model':free_model(model),
             'connection':connection if configured and connection and connection['model']==model else None,'usage':store.budget()},
             'ppo_available':Path('models/ppo_commitgym.zip').exists()}
 @app.get('/api/scenarios')

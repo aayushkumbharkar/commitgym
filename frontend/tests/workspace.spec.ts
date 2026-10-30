@@ -35,7 +35,8 @@ test('PPO checkpoint executes through the UI',async({page})=>{
   await page.getByLabel('AGENT POLICY').selectOption('ppo')
   await page.getByRole('button',{name:'Start episode',exact:true}).click()
   await page.getByRole('button',{name:'Run episode',exact:true}).click()
-  await expect(page.locator('.run-metrics').getByText('Safe rollback · v1 restored',{exact:true})).toBeVisible()
+  // The first PPO request on a fresh backend loads torch and the checkpoint.
+  await expect(page.locator('.run-metrics').getByText('Safe rollback · v1 restored',{exact:true})).toBeVisible({timeout:45000})
 })
 
 test('all navigation views and actual evaluation load',async({page})=>{
@@ -57,7 +58,7 @@ test('model unavailable state is explicit',async({page})=>{
   await page.getByLabel('AGENT POLICY').selectOption('nemotron')
   await expect(page.getByText('Nemotron live inference is unverified.',{exact:false})).toBeVisible()
   await page.getByRole('button',{name:'Start episode',exact:true}).click()
-  await expect(page.getByRole('alert')).toContainText('NEBIUS_API_KEY is not configured')
+  await expect(page.getByRole('alert')).toContainText('LLM_API_KEY is not configured')
 })
 
 test('mock tool adapter is labelled as offline and not an LLM',async({page})=>{

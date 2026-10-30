@@ -8,6 +8,12 @@ from app.environment.env import CommitGymEnv
 def response(arguments=None,name='operate_simulator'):
     return NS(usage=NS(total_tokens=100,prompt_tokens=80,completion_tokens=20),choices=[NS(message=NS(tool_calls=[NS(function=NS(name=name,arguments=json.dumps(arguments or {'actions':['inspect']})))]))])
 
+@pytest.fixture(autouse=True)
+def clean_llm_env(monkeypatch):
+    # A developer .env must never leak live settings into unit tests.
+    for k in list(__import__('os').environ):
+        if k.startswith('LLM_') or k.startswith('NEBIUS_'): monkeypatch.delenv(k,raising=False)
+
 @pytest.fixture
 def agent(tmp_path,monkeypatch):
     for k,v in {'NEBIUS_ENABLED':'true','NEBIUS_INPUT_USD_PER_MILLION':'1','NEBIUS_OUTPUT_USD_PER_MILLION':'2','NEBIUS_BUDGET_USD':'1','NEBIUS_MAX_REQUESTS':'3'}.items(): monkeypatch.setenv(k,v)
@@ -81,3 +87,25 @@ def test_offline_adapter_uses_validated_tool_batches():
     assert 1<=len(actions)<=3 and decision['mock'] and decision['tokens']==0 and decision['model'] is None
     assert e.s.step==0  # planning never mutates the real episode
     with pytest.raises(AgentUnavailable,match='decision limit'): adapter.decide(e,adapter.max_decisions)
+
+def test_openrouter_free_model_settings(tmp_path,monkeypatch):
+    from app.agents.nemotron import provider_name, free_model, resolve_api_key
+    monkeypatch.setenv('LLM_BASE_URL','https://openrouter.ai/api/v1')
+    monkeypatch.setenv('LLM_MODEL','nvidia/nemotron-3.5-lightning:free')
+    monkeypatch.setenv('LLM_API_KEY','router-key'); monkeypatch.setenv('LLM_ENABLED','true')
+    assert provider_name()=='OpenRouter' and free_model() and resolve_api_key()=='router-key'
+    client=NS(models=NS(list=lambda:NS(data=[NS(id='nvidia/nemotron-3.5-lightning:free')])),chat=NS(completions=NS(create=lambda **kwargs:response())))
+    agent=Nemotron(Store(str(tmp_path/'b.sqlite3')),client)
+    actions,decision=agent.decide(env(),0)  # no prices or budget needed for a ':free' model
+    assert actions==['inspect'] and decision['provider']=='OpenRouter' and decision['model']=='nvidia/nemotron-3.5-lightning:free'
+    monkeypatch.setenv('LLM_MAX_REQUESTS','1')
+    with pytest.raises(AgentUnavailable,match='budget exhausted'): Nemotron(agent.store,client).decide(env(),0)
+
+def test_paid_model_still_requires_prices(tmp_path,monkeypatch):
+    monkeypatch.setenv('LLM_BASE_URL','https://openrouter.ai/api/v1'); monkeypatch.setenv('LLM_MODEL','nvidia/nemotron-3.5-lightning')
+    monkeypatch.setenv('LLM_API_KEY','router-key'); monkeypatch.setenv('LLM_ENABLED','true')
+    with pytest.raises(AgentUnavailable,match='prices'): Nemotron(Store(str(tmp_path/'c.sqlite3')),NS()).decide(env(),0)
+
+def test_untrusted_endpoint_rejected(tmp_path,monkeypatch):
+    monkeypatch.setenv('LLM_BASE_URL','https://openrouter.ai.evil.example/v1'); monkeypatch.setenv('LLM_API_KEY','k')
+    with pytest.raises(AgentUnavailable,match='official HTTPS'): Nemotron(Store(str(tmp_path/'d.sqlite3'))).get_client()
