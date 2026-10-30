@@ -12,7 +12,7 @@ services:
       - key: COMMITGYM_DB
         value: /app/data/commitgym.sqlite3
       # Public mode protects /api/* (except health) with a bearer token; viewers enter it in Settings.
-      # Set COMMITGYM_PUBLIC=false and remove the token only for an open demo with LLM_ENABLED=false.
+      # For an open demo set COMMITGYM_PUBLIC=false and delete the token; live model use is then capped only by LLM_MAX_REQUESTS.
       - key: COMMITGYM_PUBLIC
         value: "true"
       - key: COMMITGYM_ACCESS_TOKEN
@@ -23,5 +23,7 @@ services:
         value: nvidia/nemotron-3.5-lightning:free
       - key: LLM_MAX_REQUESTS
         value: "60"
+      - key: LLM_MAX_OUTPUT_TOKENS
+        value: "1024"
       - key: OPENROUTER_API_KEY
         sync: false
